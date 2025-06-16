@@ -17,7 +17,7 @@ git pull
 git checkout -b $BRANCH_NAME
 
 echo "==> Applying patch and creating a commit"
-git apply --whitespace=fix "${SCRIPT_DIR}/dockerfile.patch"
+# git apply --whitespace=fix "${SCRIPT_DIR}/setup.patch"
 npm cache clean --force
 npm install express@4.17.1 --save
 git commit -sam "reset repo to introduce vulns for demo"
