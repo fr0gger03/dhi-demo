@@ -10,7 +10,7 @@ ARG NODE_VERSION=22.16.0
 ARG DIST_VERSION=alpine3.21
 
 # FROM node:${NODE_VERSION}-alpine
-FROM demonstrationorg/dhi-node:${NODE_VERSION}-${DIST_VERSION}-dev as dev
+FROM demonstrationorg/dhi-node:${NODE_VERSION}-${DIST_VERSION}-dev AS dev
 
 # Use production node environment by default.
 ENV NODE_ENV production
