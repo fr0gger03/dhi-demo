@@ -1,13 +1,10 @@
-# Comments are provided throughout this file to help you get started.
-# If you need more help, visit the Docker Compose reference guide at
-# https://docs.docker.com/go/compose-spec-reference/
+# You can build all images with docker compose build
 
-# Here the instructions define your application as a service called "server".
-# This service is built from the Dockerfile in the current directory.
-# You can add other services your application may depend on here, such as a
-# database or a cache. For examples, see the Awesome Compose repository:
-# https://github.com/docker/awesome-compose
+
 services:
+
+# Original image, vulnerabilities included
+# Build this image alone with "docker compose up nodeapp --build" OR
   nodeapp:
     build:
       context: .
@@ -16,6 +13,8 @@ services:
     ports:
       - 80:3000
 
+# Hardened image
+# Build this image alone with "docker compose up nodeapp-dhi --build"
   nodeapp-dhi:
     build:
       context: .
@@ -25,6 +24,8 @@ services:
     ports:
       - 80:3000
 
+# Hardened image with multi-stage build.
+# Build this image alone with "docker compose up nodeapp-multidhi --build"
   nodeapp-multidhi:
     build:
       context: .
