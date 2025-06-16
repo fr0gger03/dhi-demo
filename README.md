@@ -34,9 +34,9 @@ When you're ready, start your application by running:
 ```docker compose up <servicename>```
 
 For example:
-```docker compose up nodeapp```
-```docker compose up nodeapp-dhi```
-```docker compose up nodeapp-multidhi```
+- ```docker compose up nodeapp```
+- ```docker compose up nodeapp-dhi```
+- ```docker compose up nodeapp-multidhi```
 
 Your application will be available at http://localhost (Node application is actually running on port 3000, but local port 80 is mapped in compose.yaml)
 
