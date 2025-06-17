@@ -75,7 +75,8 @@ jobs:
         uses: docker/scout-action@v1.18.1
         with:
           command: cves,recommendations
-          image: ${{ steps.meta.outputs.tags }}
+          image: ${{ fromJson(steps.meta.outputs.json).tags[0] }}
+          # image: ${{ steps.meta.outputs.tags }}
           organization: ${{ env.DOCKERHUB_NAMESPACE }}
           exit-on: vulnerability, policy
           summary: true
