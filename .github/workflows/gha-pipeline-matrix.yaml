@@ -1,5 +1,8 @@
 name: Pipeline using GitHub Actions with Matrix Strategy
 
+# This workflow handles multiple Dockerfile variants with enhanced error handling
+# for Docker Scout recommendations that may fail on certain base images
+
 on:
   push:
     branches:
@@ -87,11 +90,22 @@ jobs:
         if: ${{ github.event_name != 'pull_request_target' }}
         uses: docker/scout-action@v1.18.1
         with:
-          command: cves,recommendations
+          command: cves
           image: ${{ fromJson(steps.meta.outputs.json).tags[0] }}
           organization: ${{ env.DOCKERHUB_NAMESPACE }}
           exit-on: vulnerability, policy
           summary: true
+
+      - name: Get Docker Scout recommendations
+        id: docker-scout-recommendations
+        if: ${{ github.event_name != 'pull_request_target' }}
+        uses: docker/scout-action@v1.18.1
+        with:
+          command: recommendations
+          image: ${{ fromJson(steps.meta.outputs.json).tags[0] }}
+          organization: ${{ env.DOCKERHUB_NAMESPACE }}
+          summary: true
+        continue-on-error: true
 
   # Enhanced security scanning job for each variant
   security-scan:
@@ -139,6 +153,17 @@ jobs:
           write-comment: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
           organization: ${{ env.DOCKERHUB_NAMESPACE }}
+        continue-on-error: true
+
+      - name: Docker Scout recommendations (separate step)
+        uses: docker/scout-action@v1.18.1
+        with:
+          command: recommendations
+          image: ${{ steps.image.outputs.name }}
+          organization: ${{ env.DOCKERHUB_NAMESPACE }}
+          write-comment: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
 
       - name: Docker Scout compare to base
         uses: docker/scout-action@v1.18.1
@@ -183,7 +208,8 @@ jobs:
           exit-code: true
           only-severities: critical,high
           organization: ${{ env.DOCKERHUB_NAMESPACE }}
-        continue-on-error: false
+        continue-on-error: false  # Keep strict for security
+        # Note: This step only runs CVE scan, not recommendations, so should be stable
 
   # Job to collect all image tags for downstream use
   collect-tags:
