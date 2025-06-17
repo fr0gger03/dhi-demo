@@ -1,0 +1,212 @@
+name: Pipeline using GitHub Actions with Matrix Strategy
+
+on:
+  push:
+    branches:
+      - main
+    tags: 
+      - '*'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build and push image
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    strategy:
+      matrix:
+        include:
+          - dockerfile: Dockerfile
+            variant: ""
+            context: .
+          - dockerfile: Dockerfile.dhi
+            variant: "-dhi"
+            context: .
+          - dockerfile: Dockerfile.multidhi
+            variant: "-multidhi"
+            context: .
+    outputs:
+      IMAGE_TAGS: ${{ toJSON( fromJSON(steps.meta.outputs.json).tags ) }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Load Environment Variables
+        uses: ./.github/workflows/load-env
+
+      - name: Set up containerd
+        uses: docker/setup-docker-action@v4.3
+        with:
+          set-host: true
+          daemon-config: |
+            {
+              "features": {
+                "containerd-snapshotter": true
+              }
+            }
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3.4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Determine image tags and labels
+        id: meta
+        uses: docker/metadata-action@v5.7
+        with:
+          images: ${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_PREFIX }}${{ env.IMAGE_NAME }}${{ matrix.variant }}-gha
+          tags: |
+            type=ref,enable=true,event=branch,suffix=--{{sha}}
+            type=ref,enable=true,event=branch,suffix=--latest
+            type=ref,event=tag
+            type=ref,event=pr
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3.11
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6.18
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
+          provenance: mode=max
+          sbom: true
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Analyze for critical and high CVEs
+        id: docker-scout-cves
+        if: ${{ github.event_name != 'pull_request_target' }}
+        uses: docker/scout-action@v1.18.1
+        with:
+          command: cves,recommendations
+          image: ${{ fromJson(steps.meta.outputs.json).tags[0] }}
+          organization: ${{ env.DOCKERHUB_NAMESPACE }}
+          exit-on: vulnerability, policy
+          summary: true
+
+  # Enhanced security scanning job for each variant
+  security-scan:
+    name: Enhanced Security Scan
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      matrix:
+        include:
+          - dockerfile: Dockerfile
+            variant: ""
+          - dockerfile: Dockerfile.dhi
+            variant: "-dhi"
+          - dockerfile: Dockerfile.multidhi
+            variant: "-multidhi"
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Load Environment Variables
+        uses: ./.github/workflows/load-env
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3.4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract image name for security scan
+        id: image
+        run: |
+          IMAGE_NAME="${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_PREFIX }}${{ env.IMAGE_NAME }}${{ matrix.variant }}-gha:${{ github.sha }}"
+          echo "name=${IMAGE_NAME}" >> $GITHUB_OUTPUT
+          echo "Scanning image: ${IMAGE_NAME}"
+
+      - name: Docker Scout detailed CVE scan
+        uses: docker/scout-action@v1.18.1
+        with:
+          command: cves
+          image: ${{ steps.image.outputs.name }}
+          format: sarif
+          output: sarif.output.${{ matrix.dockerfile }}.json
+          write-comment: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          organization: ${{ env.DOCKERHUB_NAMESPACE }}
+
+      - name: Docker Scout compare to base
+        uses: docker/scout-action@v1.18.1
+        with:
+          command: compare
+          image: ${{ steps.image.outputs.name }}
+          to: ${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_PREFIX }}${{ env.IMAGE_NAME }}${{ matrix.variant }}-gha:latest
+          format: markdown
+          write-comment: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          organization: ${{ env.DOCKERHUB_NAMESPACE }}
+        continue-on-error: true
+
+      - name: Docker Scout SBOM
+        uses: docker/scout-action@v1.18.1
+        with:
+          command: sbom
+          image: ${{ steps.image.outputs.name }}
+          format: json
+          output: sbom.${{ matrix.dockerfile }}.json
+          organization: ${{ env.DOCKERHUB_NAMESPACE }}
+
+      - name: Upload SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: sarif.output.${{ matrix.dockerfile }}.json
+          category: docker-scout-${{ matrix.dockerfile }}
+        if: always()
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.dockerfile }}
+          path: sbom.${{ matrix.dockerfile }}.json
+        if: always()
+
+      - name: Check for critical vulnerabilities
+        uses: docker/scout-action@v1.18.1
+        with:
+          command: cves
+          image: ${{ steps.image.outputs.name }}
+          exit-code: true
+          only-severities: critical,high
+          organization: ${{ env.DOCKERHUB_NAMESPACE }}
+        continue-on-error: false
+
+  # Job to collect all image tags for downstream use
+  collect-tags:
+    name: Collect Image Tags
+    runs-on: ubuntu-latest
+    needs: build
+    outputs:
+      all-tags: ${{ steps.combine.outputs.tags }}
+    
+    steps:
+      - name: Load Environment Variables
+        uses: actions/checkout@v4
+      - uses: ./.github/workflows/load-env
+
+      - name: Combine all image tags
+        id: combine
+        run: |
+          TAGS=$(cat << 'EOF'
+          [
+            "${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_PREFIX }}${{ env.IMAGE_NAME }}-gha:${{ github.sha }}",
+            "${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_PREFIX }}${{ env.IMAGE_NAME }}-dhi-gha:${{ github.sha }}",
+            "${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_PREFIX }}${{ env.IMAGE_NAME }}-multidhi-gha:${{ github.sha }}"
+          ]
+          EOF
+          )
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
